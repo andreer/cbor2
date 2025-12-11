@@ -42,6 +42,7 @@ enum DecodeOption {
 typedef uint8_t DecodeOptions;
 
 static int _CBORDecoder_set_fp(CBORDecoderObject *, PyObject *, void *);
+static int _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *, PyObject *, Py_ssize_t);
 static int _CBORDecoder_set_tag_hook(CBORDecoderObject *, PyObject *, void *);
 static int _CBORDecoder_set_object_hook(CBORDecoderObject *, PyObject *, void *);
 static int _CBORDecoder_set_str_errors(CBORDecoderObject *, PyObject *, void *);
@@ -102,6 +103,14 @@ CBORDecoder_clear(CBORDecoderObject *self)
     Py_CLEAR(self->shareables);
     Py_CLEAR(self->stringref_namespace);
     Py_CLEAR(self->str_errors);
+    // Free readahead buffer
+    if (self->readahead) {
+        PyMem_Free(self->readahead);
+        self->readahead = NULL;
+        self->readahead_size = 0;
+    }
+    self->read_pos = 0;
+    self->read_len = 0;
     return 0;
 }
 
@@ -144,6 +153,11 @@ CBORDecoder_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         self->immutable = false;
         self->shared_index = -1;
         self->decode_depth = 0;
+        // Initialize readahead buffer state
+        self->readahead = NULL;
+        self->readahead_size = 0;
+        self->read_pos = 0;
+        self->read_len = 0;
     }
     return (PyObject *) self;
 error:
@@ -153,21 +167,27 @@ error:
 
 
 // CBORDecoder.__init__(self, fp=None, tag_hook=None, object_hook=None,
-//                      str_errors='strict')
+//                      str_errors='strict', read_size=4096)
 int
 CBORDecoder_init(CBORDecoderObject *self, PyObject *args, PyObject *kwargs)
 {
     static char *keywords[] = {
-        "fp", "tag_hook", "object_hook", "str_errors", NULL
+        "fp", "tag_hook", "object_hook", "str_errors", "read_size", NULL
     };
     PyObject *fp = NULL, *tag_hook = NULL, *object_hook = NULL,
              *str_errors = NULL;
+    Py_ssize_t read_size = CBOR2_DEFAULT_READ_SIZE;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOO", keywords,
-                &fp, &tag_hook, &object_hook, &str_errors))
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOOn", keywords,
+                &fp, &tag_hook, &object_hook, &str_errors, &read_size))
         return -1;
 
-    if (_CBORDecoder_set_fp(self, fp, NULL) == -1)
+    if (read_size < 1) {
+        PyErr_SetString(PyExc_ValueError, "read_size must be at least 1");
+        return -1;
+    }
+
+    if (_CBORDecoder_set_fp_with_read_size(self, fp, read_size) == -1)
         return -1;
     if (tag_hook && _CBORDecoder_set_tag_hook(self, tag_hook, NULL) == -1)
         return -1;
@@ -198,17 +218,16 @@ _CBORDecoder_get_fp(CBORDecoderObject *self, void *closure)
 }
 
 
-// CBORDecoder._set_fp(self, value)
+// Internal: set fp with configurable read size
 static int
-_CBORDecoder_set_fp(CBORDecoderObject *self, PyObject *value, void *closure)
+_CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_ssize_t read_size)
 {
-    PyObject *tmp, *read;
-
     if (!value) {
         PyErr_SetString(PyExc_AttributeError, "cannot delete fp attribute");
         return -1;
     }
-    read = PyObject_GetAttr(value, _CBOR2_str_read);
+
+    PyObject *read = PyObject_GetAttr(value, _CBOR2_str_read);
     if (!(read && PyCallable_Check(read))) {
         PyErr_SetString(PyExc_ValueError,
                         "fp object must have a callable read method");
@@ -216,10 +235,36 @@ _CBORDecoder_set_fp(CBORDecoderObject *self, PyObject *value, void *closure)
     }
 
     // See notes in encoder.c / _CBOREncoder_set_fp
-    tmp = self->read;
+    PyObject *tmp = self->read;
     self->read = read;
     Py_DECREF(tmp);
+
+    // Reset buffer state
+    self->read_pos = 0;
+    self->read_len = 0;
+
+    // Allocate readahead buffer if needed
+    if (self->readahead == NULL || self->readahead_size != read_size) {
+        PyMem_Free(self->readahead);  // safe if NULL
+        self->readahead = (char *)PyMem_Malloc(read_size);
+        if (!self->readahead) {
+            self->readahead_size = 0;
+            PyErr_NoMemory();
+            return -1;
+        }
+        self->readahead_size = read_size;
+    }
     return 0;
+}
+
+// CBORDecoder._set_fp(self, value) - property setter uses default read size
+static int
+_CBORDecoder_set_fp(CBORDecoderObject *self, PyObject *value, void *closure)
+{
+    // Use existing readahead_size if already allocated, otherwise use default
+    Py_ssize_t read_size = (self->readahead_size > 0) ?
+                           self->readahead_size : CBOR2_DEFAULT_READ_SIZE;
+    return _CBORDecoder_set_fp_with_read_size(self, value, read_size);
 }
 
 
@@ -377,45 +422,91 @@ raise_from(PyObject *new_exc_type, const char *message) {
     }
 }
 
-static PyObject *
-fp_read_object(CBORDecoderObject *self, const Py_ssize_t size)
+// Refill the readahead buffer from fp.read()
+// Returns number of bytes read, or -1 on error
+static Py_ssize_t
+buffer_refill(CBORDecoderObject *self)
 {
-    PyObject *ret = NULL;
-    PyObject *obj, *size_obj;
-    size_obj = PyLong_FromSsize_t(size);
-    if (size_obj) {
-        obj = PyObject_CallFunctionObjArgs(self->read, size_obj, NULL);
-        Py_DECREF(size_obj);
-        if (obj) {
-            assert(PyBytes_CheckExact(obj));
-            if (PyBytes_GET_SIZE(obj) == (Py_ssize_t) size) {
-                ret = obj;
-            } else {
-                PyErr_Format(
-                    _CBOR2_CBORDecodeEOF,
-                    "premature end of stream (expected to read %zd bytes, "
-                    "got %zd instead)", size, PyBytes_GET_SIZE(obj));
-                Py_DECREF(obj);
-            }
-        }
+    PyObject *size_obj, *obj;
+    Py_ssize_t bytes_read;
+
+    // Reset position in buffer
+    self->read_pos = 0;
+    self->read_len = 0;
+
+    size_obj = PyLong_FromSsize_t(self->readahead_size);
+    if (!size_obj)
+        return -1;
+
+    obj = PyObject_CallFunctionObjArgs(self->read, size_obj, NULL);
+    Py_DECREF(size_obj);
+
+    if (!obj)
+        return -1;
+
+    assert(PyBytes_CheckExact(obj));
+    bytes_read = PyBytes_GET_SIZE(obj);
+
+    if (bytes_read > 0) {
+        memcpy(self->readahead, PyBytes_AS_STRING(obj), bytes_read);
+        self->read_len = bytes_read;
     }
-    return ret;
+
+    Py_DECREF(obj);
+    return bytes_read;
 }
 
-
+// Read into caller's buffer using the readahead buffer
 static int
 fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
 {
-    int ret = -1;
-    PyObject *obj = fp_read_object(self, size);
-    if (obj) {
-        char *data = PyBytes_AS_STRING(obj);
-        if (data) {
-            memcpy(buf, data, size);
-            ret = 0;
+    Py_ssize_t available, to_copy, remaining, total_copied;
+
+    remaining = size;
+    total_copied = 0;
+
+    while (remaining > 0) {
+        available = self->read_len - self->read_pos;
+
+        if (available > 0) {
+            // Copy from buffer
+            to_copy = (available < remaining) ? available : remaining;
+            memcpy(buf + total_copied, self->readahead + self->read_pos, to_copy);
+            self->read_pos += to_copy;
+            total_copied += to_copy;
+            remaining -= to_copy;
+        } else {
+            // Buffer exhausted, refill from stream
+            Py_ssize_t bytes_read = buffer_refill(self);
+            if (bytes_read < 0)
+                return -1;
+            if (bytes_read == 0) {
+                // EOF reached before we got all requested bytes
+                PyErr_Format(
+                    _CBOR2_CBORDecodeEOF,
+                    "premature end of stream (expected to read %zd bytes, "
+                    "got %zd instead)", size, total_copied);
+                return -1;
+            }
         }
-        Py_DECREF(obj);
     }
+
+    return 0;
+}
+
+// Read and return as PyBytes object
+static PyObject *
+fp_read_object(CBORDecoderObject *self, const Py_ssize_t size)
+{
+    PyObject *ret = PyBytes_FromStringAndSize(NULL, size);
+    if (!ret)
+        return NULL;
+
+    if (fp_read(self, PyBytes_AS_STRING(ret), size) == -1) {
+        Py_DECREF(ret);
+        return NULL;
+    }
+
     return ret;
 }
 
@@ -2116,6 +2207,8 @@ static PyObject *
 CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
 {
     PyObject *save_read, *buf, *ret = NULL;
+    Py_ssize_t save_read_pos = self->read_pos;
+    Py_ssize_t save_read_len = self->read_len;
 
     if (!_CBOR2_BytesIO && _CBOR2_init_BytesIO() == -1)
         return NULL;
@@ -2126,12 +2219,16 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     if (buf) {
         self->read = PyObject_GetAttr(buf, _CBOR2_str_read);
         if (self->read) {
+            self->read_pos = 0;
+            self->read_len = 0;
             ret = decode(self, DECODE_NORMAL);
             Py_DECREF(self->read);
         }
         Py_DECREF(buf);
     }
     self->read = save_read;
+    self->read_pos = save_read_pos;
+    self->read_len = save_read_len;
     self->decode_depth--;
     assert(self->decode_depth >= 0);
     if (self->decode_depth == 0) {
