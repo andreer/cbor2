@@ -10,7 +10,7 @@ name = "cbor2"
 description = "CBOR (de)serializer with extensive tag support"
 readme = "README.rst"
 authors = [{name = "Alex Grönholm", email = "alex.gronholm@nextday.fi"}]
-license = "MIT"
+license = {text = "MIT"}
 keywords = ["serialization", "cbor"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
