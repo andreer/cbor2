@@ -455,6 +455,28 @@ buffer_refill(CBORDecoderObject *self)
     return bytes_read;
 }
 
+// Read directly into caller's buffer (bypassing readahead buffer)
+static Py_ssize_t
+fp_read_bytes(CBORDecoderObject *self, char *buf, Py_ssize_t size)
+{
+    PyObject *size_obj = PyLong_FromSsize_t(size);
+    if (!size_obj)
+        return -1;
+
+    PyObject *obj = PyObject_CallFunctionObjArgs(self->read, size_obj, NULL);
+    Py_DECREF(size_obj);
+    if (!obj)
+        return -1;
+
+    assert(PyBytes_CheckExact(obj));
+    Py_ssize_t bytes_read = PyBytes_GET_SIZE(obj);
+    if (bytes_read > 0)
+        memcpy(buf, PyBytes_AS_STRING(obj), bytes_read);
+
+    Py_DECREF(obj);
+    return bytes_read;
+}
+
 // Read into caller's buffer using the readahead buffer
 static int
 fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
@@ -474,17 +496,29 @@ fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
             self->read_pos += to_copy;
             total_copied += to_copy;
             remaining -= to_copy;
-        } else {
-            // Buffer exhausted, refill from stream
-            Py_ssize_t bytes_read = buffer_refill(self);
-            if (bytes_read < 0)
+        } else if (remaining >= self->readahead_size) {
+            // Large remaining: read directly into destination, bypass buffer
+            Py_ssize_t bytes_read = fp_read_bytes(
+                self, buf + total_copied, remaining);
+            if (bytes_read <= 0) {
+                if (bytes_read == 0)
+                    PyErr_Format(
+                        _CBOR2_CBORDecodeEOF,
+                        "premature end of stream (expected to read %zd bytes, "
+                        "got %zd instead)", size, total_copied);
                 return -1;
-            if (bytes_read == 0) {
-                // EOF reached before we got all requested bytes
-                PyErr_Format(
-                    _CBOR2_CBORDecodeEOF,
-                    "premature end of stream (expected to read %zd bytes, "
-                    "got %zd instead)", size, total_copied);
+            }
+            total_copied += bytes_read;
+            remaining -= bytes_read;
+        } else {
+            // Small remaining: refill buffer
+            Py_ssize_t bytes_read = buffer_refill(self);
+            if (bytes_read <= 0) {
+                if (bytes_read == 0)
+                    PyErr_Format(
+                        _CBOR2_CBORDecodeEOF,
+                        "premature end of stream (expected to read %zd bytes, "
+                        "got %zd instead)", size, total_copied);
                 return -1;
             }
         }
