@@ -166,7 +166,7 @@ error:
 
 
 // CBORDecoder.__init__(self, fp=None, tag_hook=None, object_hook=None,
-//                      str_errors='strict', read_size=65536)
+//                      str_errors='strict', read_size=4096)
 int
 CBORDecoder_init(CBORDecoderObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -2185,47 +2185,28 @@ CBORDecoder_decode(CBORDecoderObject *self)
 static PyObject *
 CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
 {
-    PyObject *ret = NULL;
-    PyObject *bytesio = NULL;
-
-    if (!PyBytes_Check(data)) {
-        PyErr_SetString(PyExc_TypeError, "data must be bytes");
-        return NULL;
-    }
-
-    // Save current state
-    PyObject *save_read = self->read;
+    PyObject *save_read, *buf, *ret = NULL;
     Py_ssize_t save_read_pos = self->read_pos;
     Py_ssize_t save_read_len = self->read_len;
 
-    // Create BytesIO wrapper
-    PyObject *io_module = PyImport_ImportModule("io");
-    if (!io_module)
-        return NULL;
-    bytesio = PyObject_CallMethod(io_module, "BytesIO", "O", data);
-    Py_DECREF(io_module);
-    if (!bytesio)
+    if (!_CBOR2_BytesIO && _CBOR2_init_BytesIO() == -1)
         return NULL;
 
-    // Set up fp to use the BytesIO
-    PyObject *read = PyObject_GetAttr(bytesio, _CBOR2_str_read);
-    if (!read) {
-        Py_DECREF(bytesio);
-        return NULL;
+    save_read = self->read;
+    buf = PyObject_CallFunctionObjArgs(_CBOR2_BytesIO, data, NULL);
+    if (buf) {
+        self->read = PyObject_GetAttr(buf, _CBOR2_str_read);
+        if (self->read) {
+            self->read_pos = 0;
+            self->read_len = 0;
+            ret = decode(self, DECODE_NORMAL);
+            Py_DECREF(self->read);
+        }
+        Py_DECREF(buf);
     }
-    self->read = read;
-    self->read_pos = 0;
-    self->read_len = 0;
-
-    ret = decode(self, DECODE_NORMAL);
-
-    // Restore previous state
-    Py_DECREF(self->read);
-    Py_DECREF(bytesio);
     self->read = save_read;
     self->read_pos = save_read_pos;
     self->read_len = save_read_len;
-
     return ret;
 }
 
