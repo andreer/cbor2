@@ -1048,6 +1048,72 @@ decode_string(CBORDecoderObject *self, uint8_t subtype)
 }
 
 
+// Fast inline decode for common types - returns NULL and sets *fallback=1 if
+// type not handled (caller should use normal decode path after putting byte back)
+static inline PyObject *
+decode_fast(CBORDecoderObject *self, uint8_t lead, int *fallback)
+{
+    *fallback = 0;
+    if (lead <= 0x17) {
+        // Small positive int (0-23)
+        return PyLong_FromLong(lead);
+    } else if (lead >= 0x20 && lead <= 0x37) {
+        // Small negative int (-1 to -24)
+        return PyLong_FromLong(-1 - (lead - 0x20));
+    } else if (lead >= 0x60 && lead <= 0x79 && self->stringref_namespace == Py_None) {
+        // Text string - common for dict keys and values
+        // Only use fast path when stringref_namespace is disabled
+        Py_ssize_t length;
+        if (lead == 0x79) {
+            // 2-byte length prefix (256-65535 bytes)
+            uint8_t len_bytes[2];
+            if (fp_read(self, (char*)len_bytes, 2) != 0)
+                return NULL;
+            length = (len_bytes[0] << 8) | len_bytes[1];
+        } else if (lead == 0x78) {
+            // 1-byte length prefix (24-255 bytes)
+            uint8_t len_byte;
+            if (fp_read(self, (char*)&len_byte, 1) != 0)
+                return NULL;
+            length = len_byte;
+        } else {
+            // 0-23 bytes (length in lead byte)
+            length = lead - 0x60;
+        }
+        if (length == 0)
+            return PyUnicode_New(0, 0);
+        // Allocate buffer - use stack for <=256, heap for larger
+        char stack_buf[256];
+        char *buf = (length <= 256) ? stack_buf : PyMem_Malloc(length);
+        if (!buf)
+            return PyErr_NoMemory();
+        if (fp_read(self, buf, length) != 0) {
+            if (buf != stack_buf) PyMem_Free(buf);
+            return NULL;
+        }
+        PyObject *result = PyUnicode_DecodeUTF8(buf, length, NULL);
+        if (buf != stack_buf) PyMem_Free(buf);
+        return result;
+    } else if (lead == 0xfb) {
+        // float64
+        union { uint64_t i; double f; char buf[8]; } u;
+        if (fp_read(self, u.buf, 8) != 0)
+            return NULL;
+        u.i = be64toh(u.i);
+        return PyFloat_FromDouble(u.f);
+    } else if (lead == 0xfa) {
+        // float32
+        union { uint32_t i; float f; char buf[4]; } u;
+        if (fp_read(self, u.buf, 4) != 0)
+            return NULL;
+        u.i = be32toh(u.i);
+        return PyFloat_FromDouble(u.f);
+    }
+    *fallback = 1;
+    return NULL;
+}
+
+
 static PyObject *
 decode_indefinite_array(CBORDecoderObject *self)
 {
@@ -1058,11 +1124,27 @@ decode_indefinite_array(CBORDecoderObject *self)
         ret = array;
         set_shareable(self, array);
         while (ret) {
-            item = decode(self, DECODE_UNSHARED);
-            if (item == break_marker) {
-                Py_DECREF(item);
+            // Fast path for common types
+            uint8_t lead;
+            int fallback;
+            if (fp_read(self, (char*)&lead, 1) != 0) {
+                ret = NULL;
                 break;
-            } else if (item) {
+            }
+            // Check for break marker first
+            if (lead == 0xff) {
+                break;
+            }
+            item = decode_fast(self, lead, &fallback);
+            if (fallback) {
+                self->read_pos--;
+                item = decode(self, DECODE_UNSHARED);
+                if (item == break_marker) {
+                    Py_DECREF(item);
+                    break;
+                }
+            }
+            if (item) {
                 if (PyList_Append(array, item) == -1)
                     ret = NULL;
                 Py_DECREF(item);
@@ -1160,7 +1242,18 @@ decode_definite_array(CBORDecoderObject *self, Py_ssize_t length)
                 ret = array;
                 set_shareable(self, array);
                 for (i = 0; i < length; ++i) {
-                    item = decode(self, DECODE_UNSHARED);
+                    // Fast path for common types - skip full decode() overhead
+                    uint8_t lead;
+                    int fallback;
+                    if (fp_read(self, (char*)&lead, 1) != 0) {
+                        ret = NULL;
+                        break;
+                    }
+                    item = decode_fast(self, lead, &fallback);
+                    if (fallback) {
+                        self->read_pos--;
+                        item = decode(self, DECODE_UNSHARED);
+                    }
                     if (item)
                         PyList_SET_ITEM(array, i, item);
                     else {
@@ -1215,12 +1308,38 @@ decode_map(CBORDecoderObject *self, uint8_t subtype)
         if (decode_length(self, subtype, &length, &indefinite) == 0) {
             if (indefinite) {
                 while (ret) {
-                    key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
-                    if (key == break_marker) {
-                        Py_DECREF(key);
+                    // Fast path for keys
+                    uint8_t lead;
+                    int fallback;
+                    if (fp_read(self, (char*)&lead, 1) != 0) {
+                        ret = NULL;
                         break;
-                    } else if (key) {
-                        value = decode(self, DECODE_UNSHARED);
+                    }
+                    // Check for break marker first
+                    if (lead == 0xff) {
+                        break;
+                    }
+                    key = decode_fast(self, lead, &fallback);
+                    if (fallback) {
+                        self->read_pos--;
+                        key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                        if (key == break_marker) {
+                            Py_DECREF(key);
+                            break;
+                        }
+                    }
+                    if (key) {
+                        // Fast path for values
+                        if (fp_read(self, (char*)&lead, 1) != 0) {
+                            Py_DECREF(key);
+                            ret = NULL;
+                            break;
+                        }
+                        value = decode_fast(self, lead, &fallback);
+                        if (fallback) {
+                            self->read_pos--;
+                            value = decode(self, DECODE_UNSHARED);
+                        }
                         if (value) {
                             if (PyDict_SetItem(map, key, value) == -1)
                                 ret = NULL;
@@ -1233,9 +1352,30 @@ decode_map(CBORDecoderObject *self, uint8_t subtype)
                 }
             } else {
                 while (ret && length--) {
-                    key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                    // Fast path for keys (usually short strings)
+                    uint8_t lead;
+                    int fallback;
+                    if (fp_read(self, (char*)&lead, 1) != 0) {
+                        ret = NULL;
+                        break;
+                    }
+                    key = decode_fast(self, lead, &fallback);
+                    if (fallback) {
+                        self->read_pos--;
+                        key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                    }
                     if (key) {
-                        value = decode(self, DECODE_UNSHARED);
+                        // Fast path for values
+                        if (fp_read(self, (char*)&lead, 1) != 0) {
+                            Py_DECREF(key);
+                            ret = NULL;
+                            break;
+                        }
+                        value = decode_fast(self, lead, &fallback);
+                        if (fallback) {
+                            self->read_pos--;
+                            value = decode(self, DECODE_UNSHARED);
+                        }
                         if (value) {
                             if (PyDict_SetItem(map, key, value) == -1)
                                 ret = NULL;
