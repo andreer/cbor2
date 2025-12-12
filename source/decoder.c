@@ -2381,6 +2381,13 @@ PyDoc_STRVAR(CBORDecoder__doc__,
 "    dictionary. This callback is invoked for each deserialized\n"
 "    :class:`dict` object. The return value is substituted for the dict\n"
 "    in the deserialized output.\n"
+":param read_size:\n"
+"    the size of the read buffer (default 4096). The decoder reads from\n"
+"    the stream in chunks of this size for performance. This means the\n"
+"    stream position may advance beyond the bytes actually decoded.\n"
+"    Code that needs to read from the stream after decoding should use\n"
+"    :meth:`decode_from_bytes` instead, or set ``read_size=1`` to disable\n"
+"    buffering (at a performance cost).\n"
 "\n"
 ".. _CBOR: https://cbor.io/\n"
 );
