@@ -233,6 +233,7 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
         return -1;
     }
 
+    // See notes in encoder.c / _CBOREncoder_set_fp
     PyObject *tmp = self->read;
     self->read = read;
     Py_DECREF(tmp);
