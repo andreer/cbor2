@@ -17,15 +17,11 @@ typedef struct {
     bool immutable;
     Py_ssize_t shared_index;
 
-    // Read buffer state - points to either readahead[] or external bytes
-    const char *read_buf;       // current buffer pointer
+    // Readahead buffer for streaming
+    char *readahead;            // allocated buffer
+    Py_ssize_t readahead_size;  // size of allocated buffer
     Py_ssize_t read_pos;        // current position in buffer
     Py_ssize_t read_len;        // valid bytes in buffer
-    PyObject *read_buf_obj;     // keeps external buffer alive (NULL if using readahead)
-
-    // Readahead buffer for streaming (allocated on first use)
-    char *readahead;            // allocated buffer
-    Py_ssize_t readahead_size;  // size of allocated buffer (also used as refill size)
 } CBORDecoderObject;
 
 extern PyTypeObject CBORDecoderType;
