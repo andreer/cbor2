@@ -111,6 +111,10 @@ CBORDecoder_clear(CBORDecoderObject *self)
     }
     self->read_pos = 0;
     self->read_len = 0;
+    // Clear string key cache
+    for (int i = 0; i < STRING_KEY_CACHE_SIZE; i++) {
+        Py_CLEAR(self->string_cache[i].str);
+    }
     return 0;
 }
 
@@ -1108,9 +1112,97 @@ decode_fast(CBORDecoderObject *self, uint8_t lead, int *fallback)
             return NULL;
         u.i = be32toh(u.i);
         return PyFloat_FromDouble(u.f);
+    } else if (lead == 0xf4) {
+        // false
+        Py_RETURN_FALSE;
+    } else if (lead == 0xf5) {
+        // true
+        Py_RETURN_TRUE;
+    } else if (lead == 0xf6) {
+        // null
+        Py_RETURN_NONE;
     }
     *fallback = 1;
     return NULL;
+}
+
+// djb2 hash for string key cache
+static inline uint32_t
+string_hash(const char *data, Py_ssize_t len)
+{
+    uint32_t hash = 5381;
+    for (Py_ssize_t i = 0; i < len; i++) {
+        hash = ((hash << 5) + hash) + (uint8_t)data[i];
+    }
+    return hash;
+}
+
+// Fast path for decoding string dict keys with caching
+// Returns NULL if should fall back to normal decode (e.g. too long, not a string)
+static inline PyObject *
+decode_string_key_cached(CBORDecoderObject *self, uint8_t lead)
+{
+    Py_ssize_t length;
+
+    // Determine string length from lead byte
+    if (lead >= 0x60 && lead <= 0x77) {
+        // 0-23 bytes (length in lead byte)
+        length = lead - 0x60;
+    } else if (lead == 0x78) {
+        // 1-byte length prefix (24-255 bytes)
+        uint8_t len_byte;
+        if (fp_read(self, (char*)&len_byte, 1) != 0)
+            return NULL;
+        length = len_byte;
+        // Don't cache strings longer than max
+        if (length > STRING_KEY_MAX_LEN) {
+            // Put back the length byte and fall back
+            self->read_pos--;
+            return NULL;  // Signal to use normal decode
+        }
+    } else {
+        // Not a short string, fall back
+        return NULL;
+    }
+
+    // Empty string
+    if (length == 0)
+        return PyUnicode_New(0, 0);
+
+    // Read string data to stack buffer
+    char buf[STRING_KEY_MAX_LEN];
+    if (fp_read(self, buf, length) != 0)
+        return NULL;
+
+    // Calculate hash and cache slot
+    uint32_t hash = string_hash(buf, length);
+    uint32_t slot = hash & (STRING_KEY_CACHE_SIZE - 1);
+    StringKeyCacheEntry *entry = &self->string_cache[slot];
+
+    // Check cache hit
+    if (entry->str != NULL &&
+        entry->hash == hash &&
+        entry->len == length &&
+        memcmp(entry->data, buf, length) == 0) {
+        // Cache hit - return existing string with new reference
+        Py_INCREF(entry->str);
+        return entry->str;
+    }
+
+    // Cache miss - create new string
+    PyObject *result = PyUnicode_DecodeUTF8(buf, length, NULL);
+    if (result == NULL)
+        return NULL;
+
+    // Store in cache (evicting any previous entry)
+    Py_XDECREF(entry->str);
+    entry->str = result;
+    Py_INCREF(result);  // Cache keeps its own reference
+    entry->hash = hash;
+    entry->len = (uint8_t)length;
+    memcpy(entry->data, buf, length);
+
+    return result;
 }
 
 
@@ -1319,13 +1411,20 @@ decode_map(CBORDecoderObject *self, uint8_t subtype)
                     if (lead == 0xff) {
                         break;
                     }
-                    key = decode_fast(self, lead, &fallback);
-                    if (fallback) {
-                        self->read_pos--;
-                        key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
-                        if (key == break_marker) {
-                            Py_DECREF(key);
-                            break;
+                    // Try cached string decode for keys first
+                    key = NULL;
+                    if (self->stringref_namespace == Py_None && lead >= 0x60 && lead <= 0x78) {
+                        key = decode_string_key_cached(self, lead);
+                    }
+                    if (key == NULL) {
+                        key = decode_fast(self, lead, &fallback);
+                        if (fallback) {
+                            self->read_pos--;
+                            key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                            if (key == break_marker) {
+                                Py_DECREF(key);
+                                break;
+                            }
                         }
                     }
                     if (key) {
@@ -1359,10 +1458,17 @@ decode_map(CBORDecoderObject *self, uint8_t subtype)
                         ret = NULL;
                         break;
                     }
-                    key = decode_fast(self, lead, &fallback);
-                    if (fallback) {
-                        self->read_pos--;
-                        key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                    // Try cached string decode for keys first
+                    key = NULL;
+                    if (self->stringref_namespace == Py_None && lead >= 0x60 && lead <= 0x78) {
+                        key = decode_string_key_cached(self, lead);
+                    }
+                    if (key == NULL) {
+                        key = decode_fast(self, lead, &fallback);
+                        if (fallback) {
+                            self->read_pos--;
+                            key = decode(self, DECODE_IMMUTABLE | DECODE_UNSHARED);
+                        }
                     }
                     if (key) {
                         // Fast path for values
