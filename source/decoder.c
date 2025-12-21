@@ -497,23 +497,21 @@ fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
             self->read_pos += to_copy;
             total_copied += to_copy;
             remaining -= to_copy;
-        } else if (remaining >= self->readahead_size) {
-            // Large remaining: read directly into destination, bypass buffer
-            Py_ssize_t bytes_read = fp_read_bytes(
-                self, buf + total_copied, remaining);
-            if (bytes_read <= 0) {
-                if (bytes_read == 0)
-                    PyErr_Format(
-                        _CBOR2_CBORDecodeEOF,
-                        "premature end of stream (expected to read %zd bytes, "
-                        "got %zd instead)", size, total_copied);
-                return -1;
-            }
-            total_copied += bytes_read;
-            remaining -= bytes_read;
         } else {
-            // Small remaining: refill buffer
-            Py_ssize_t bytes_read = buffer_refill(self);
+            Py_ssize_t bytes_read;
+
+            if (remaining >= self->readahead_size) {
+                // Large remaining: read directly into destination, bypass buffer
+                bytes_read = fp_read_bytes(self, buf + total_copied, remaining);
+                if (bytes_read > 0) {
+                    total_copied += bytes_read;
+                    remaining -= bytes_read;
+                }
+            } else {
+                // Small remaining: refill buffer
+                bytes_read = buffer_refill(self);
+            }
+
             if (bytes_read <= 0) {
                 if (bytes_read == 0)
                     PyErr_Format(
