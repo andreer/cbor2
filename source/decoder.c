@@ -2239,34 +2239,67 @@ static PyObject *
 CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
 {
     PyObject *save_read, *buf, *ret = NULL;
-    Py_ssize_t save_read_pos = self->read_pos;
-    Py_ssize_t save_read_len = self->read_len;
+    bool is_nested = (self->decode_depth > 0);
+    Py_ssize_t save_read_pos = 0, save_read_len = 0;
+    char *save_buffer = NULL;
 
     if (!_CBOR2_BytesIO && _CBOR2_init_BytesIO() == -1)
         return NULL;
 
+    buf = PyObject_CallFunctionObjArgs(_CBOR2_BytesIO, data, NULL);
+    if (!buf)
+        return NULL;
+
     self->decode_depth++;
     save_read = self->read;
-    buf = PyObject_CallFunctionObjArgs(_CBOR2_BytesIO, data, NULL);
-    if (buf) {
-        self->read = PyObject_GetAttr(buf, _CBOR2_str_read);
-        if (self->read) {
-            self->read_pos = 0;
-            self->read_len = 0;
-            ret = decode(self, DECODE_NORMAL);
-            Py_DECREF(self->read);
-        }
-        Py_DECREF(buf);
+    save_read_pos = self->read_pos;
+    save_read_len = self->read_len;
+
+    // Save buffer pointer if nested
+    if (is_nested) {
+        save_buffer = self->readahead;
+        self->readahead = NULL;  // Prevent setter from freeing saved buffer
     }
+
+    // Set up BytesIO decoder - setter handles buffer allocation
+    if (_CBORDecoder_set_fp_with_read_size(self, buf, self->readahead_size) == -1) {
+        if (is_nested)
+            self->readahead = save_buffer;  // Restore on error
+        goto error;
+    }
+
+    // Decode
+    ret = decode(self, DECODE_NORMAL);
+
+    // Cleanup and restore
+    Py_DECREF(buf);
+    PyObject *tmp = self->read;
     self->read = save_read;
+    Py_DECREF(tmp);
+    self->decode_depth--;
+
+    if (is_nested) {
+        PyMem_Free(self->readahead);
+        self->readahead = save_buffer;
+    }
     self->read_pos = save_read_pos;
     self->read_len = save_read_len;
-    self->decode_depth--;
+
     assert(self->decode_depth >= 0);
     if (self->decode_depth == 0) {
         clear_shareable_state(self);
     }
+
     return ret;
+
+error:
+    if (is_nested) {
+        PyMem_Free(self->readahead);
+        self->readahead = save_buffer;
+    }
+    Py_DECREF(buf);
+    self->decode_depth--;
+    return NULL;
 }
 
 
