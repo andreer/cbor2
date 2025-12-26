@@ -2242,10 +2242,10 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     ret = decode(self, DECODE_NORMAL);
 
     // Cleanup and restore
-    Py_DECREF(buf);
     PyObject *tmp = self->read;
     self->read = save_read;
     Py_DECREF(tmp);
+    Py_DECREF(buf);
     self->decode_depth--;
 
     if (is_nested) {
