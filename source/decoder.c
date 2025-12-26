@@ -422,40 +422,6 @@ raise_from(PyObject *new_exc_type, const char *message) {
     }
 }
 
-// Refill the readahead buffer from fp.read()
-// Returns number of bytes read, or -1 on error
-static Py_ssize_t
-buffer_refill(CBORDecoderObject *self)
-{
-    PyObject *size_obj, *obj;
-    Py_ssize_t bytes_read;
-
-    // Reset position in buffer
-    self->read_pos = 0;
-    self->read_len = 0;
-
-    size_obj = PyLong_FromSsize_t(self->readahead_size);
-    if (!size_obj)
-        return -1;
-
-    obj = PyObject_CallFunctionObjArgs(self->read, size_obj, NULL);
-    Py_DECREF(size_obj);
-
-    if (!obj)
-        return -1;
-
-    assert(PyBytes_CheckExact(obj));
-    bytes_read = PyBytes_GET_SIZE(obj);
-
-    if (bytes_read > 0) {
-        memcpy(self->readahead, PyBytes_AS_STRING(obj), bytes_read);
-        self->read_len = bytes_read;
-    }
-
-    Py_DECREF(obj);
-    return bytes_read;
-}
-
 // Read directly into caller's buffer (bypassing readahead buffer)
 static Py_ssize_t
 fp_read_bytes(CBORDecoderObject *self, char *buf, Py_ssize_t size)
@@ -509,7 +475,11 @@ fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
                 }
             } else {
                 // Small remaining: refill buffer
-                bytes_read = buffer_refill(self);
+                self->read_pos = 0;
+                self->read_len = 0;
+                bytes_read = fp_read_bytes(self, self->readahead, self->readahead_size);
+                if (bytes_read > 0)
+                    self->read_len = bytes_read;
             }
 
             if (bytes_read <= 0) {
