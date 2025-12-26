@@ -2222,6 +2222,7 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
 
     self->decode_depth++;
     save_read = self->read;
+    Py_INCREF(save_read);  // Keep alive while we use a different read method
     save_read_pos = self->read_pos;
     save_read_len = self->read_len;
 
@@ -2242,9 +2243,8 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     ret = decode(self, DECODE_NORMAL);
 
     // Cleanup and restore
-    PyObject *tmp = self->read;
-    self->read = save_read;
-    Py_DECREF(tmp);
+    Py_XDECREF(self->read);  // Decrement BytesIO read method
+    self->read = save_read;   // Restore saved read (already has correct refcount)
     Py_DECREF(buf);
     self->decode_depth--;
 
@@ -2266,6 +2266,15 @@ error:
     if (is_nested) {
         PyMem_Free(self->readahead);
         self->readahead = save_buffer;
+    }
+    // Restore read object - check if setter changed it
+    if (self->read != save_read) {
+        // Setter succeeded in changing self->read before failing
+        Py_XDECREF(self->read);
+        self->read = save_read;
+    } else {
+        // Setter never changed self->read, remove our extra INCREF
+        Py_DECREF(save_read);
     }
     Py_DECREF(buf);
     self->decode_depth--;
