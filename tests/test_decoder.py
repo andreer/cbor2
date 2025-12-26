@@ -1099,6 +1099,7 @@ def test_decode_from_bytes_in_hook_preserves_buffer(impl):
     embedded CBOR data. Before the fix, the stream's readahead buffer would be
     corrupted, causing subsequent reads to fail or return wrong data.
     """
+
     def tag_hook(decoder, tag):
         if tag.tag == 999:
             # Decode embedded CBOR (documented pattern)
@@ -1108,14 +1109,14 @@ def test_decode_from_bytes_in_hook_preserves_buffer(impl):
     # Test data: array with [tag(999, embedded_cbor), "after_hook", "final"]
     # embedded_cbor encodes: [1, 2, 3]
     data = unhexlify(
-        "83"              # array(3)
-        "d903e7"          # tag(999)
-        "44"              # bytes(4)
-        "83010203"        # embedded: array [1, 2, 3]
-        "6a"              # text(10)
+        "83"  # array(3)
+        "d903e7"  # tag(999)
+        "44"  # bytes(4)
+        "83010203"  # embedded: array [1, 2, 3]
+        "6a"  # text(10)
         "61667465725f686f6f6b"  # "after_hook"
-        "65"              # text(5)
-        "66696e616c"      # "final"
+        "65"  # text(5)
+        "66696e616c"  # "final"
     )
 
     # Decode from stream (not bytes) to use readahead buffer
@@ -1144,6 +1145,7 @@ def test_decode_from_bytes_deeply_nested_in_hook(impl):
     levels, the buffer would be completely corrupted, mixing data from different
     BytesIO objects and the original stream.
     """
+
     def tag_hook(decoder, tag):
         if tag.tag in [999, 888, 777]:
             # Recursively decode embedded CBOR
@@ -1153,14 +1155,14 @@ def test_decode_from_bytes_deeply_nested_in_hook(impl):
     # Test data: [tag(999, tag(888, tag(777, [1,2,3]))), "after", "final"]
     # Each tag contains embedded CBOR
     data = unhexlify(
-        "83"                    # array(3)
-        "d903e7"                # tag(999)
-        "4c"                    # bytes(12)
+        "83"  # array(3)
+        "d903e7"  # tag(999)
+        "4c"  # bytes(12)
         "d9037848d903094483010203"  # embedded: tag(888, tag(777, [1,2,3]))
-        "65"                    # text(5)
-        "6166746572"            # "after"
-        "65"                    # text(5)
-        "66696e616c"            # "final"
+        "65"  # text(5)
+        "6166746572"  # "after"
+        "65"  # text(5)
+        "66696e616c"  # "final"
     )
 
     # Decode from stream to use readahead buffer
