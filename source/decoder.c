@@ -234,26 +234,30 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
         return -1;
     }
 
+    char *new_buffer = NULL;
+    if (self->readahead == NULL || self->readahead_size != read_size) {
+        new_buffer = (char *)PyMem_Malloc(read_size);
+        if (!new_buffer) {
+            Py_DECREF(read);
+            PyErr_NoMemory();
+            return -1;
+        }
+    }
+
     // See notes in encoder.c / _CBOREncoder_set_fp
     PyObject *tmp = self->read;
     self->read = read;
     Py_DECREF(tmp);
 
-    // Reset buffer state
     self->read_pos = 0;
     self->read_len = 0;
 
-    // Allocate readahead buffer if needed
-    if (self->readahead == NULL || self->readahead_size != read_size) {
-        PyMem_Free(self->readahead);  // safe if NULL
-        self->readahead = (char *)PyMem_Malloc(read_size);
-        if (!self->readahead) {
-            self->readahead_size = 0;
-            PyErr_NoMemory();
-            return -1;
-        }
+    if (new_buffer) {
+        PyMem_Free(self->readahead);
+        self->readahead = new_buffer;
         self->readahead_size = read_size;
     }
+
     return 0;
 }
 
@@ -2267,15 +2271,7 @@ error:
         PyMem_Free(self->readahead);
         self->readahead = save_buffer;
     }
-    // Restore read object - check if setter changed it
-    if (self->read != save_read) {
-        // Setter succeeded in changing self->read before failing
-        Py_XDECREF(self->read);
-        self->read = save_read;
-    } else {
-        // Setter never changed self->read, remove our extra INCREF
-        Py_DECREF(save_read);
-    }
+    Py_DECREF(save_read);
     Py_DECREF(buf);
     self->decode_depth--;
     return NULL;
