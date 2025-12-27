@@ -2238,9 +2238,14 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
 
     // Set up BytesIO decoder - setter handles buffer allocation
     if (_CBORDecoder_set_fp_with_read_size(self, buf, self->readahead_size) == -1) {
-        if (is_nested)
-            self->readahead = save_buffer;  // Restore on error
-        goto error;
+        if (is_nested) {
+            PyMem_Free(self->readahead);
+            self->readahead = save_buffer;
+        }
+        Py_DECREF(save_read);
+        Py_DECREF(buf);
+        self->decode_depth--;
+        return NULL;
     }
 
     // Decode
@@ -2265,16 +2270,6 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     }
 
     return ret;
-
-error:
-    if (is_nested) {
-        PyMem_Free(self->readahead);
-        self->readahead = save_buffer;
-    }
-    Py_DECREF(save_read);
-    Py_DECREF(buf);
-    self->decode_depth--;
-    return NULL;
 }
 
 
