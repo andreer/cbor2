@@ -103,7 +103,6 @@ CBORDecoder_clear(CBORDecoderObject *self)
     Py_CLEAR(self->shareables);
     Py_CLEAR(self->stringref_namespace);
     Py_CLEAR(self->str_errors);
-    // Free readahead buffer
     if (self->readahead) {
         PyMem_Free(self->readahead);
         self->readahead = NULL;
@@ -153,7 +152,6 @@ CBORDecoder_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         self->immutable = false;
         self->shared_index = -1;
         self->decode_depth = 0;
-        // Initialize readahead buffer state
         self->readahead = NULL;
         self->readahead_size = 0;
         self->read_pos = 0;
@@ -222,19 +220,20 @@ _CBORDecoder_get_fp(CBORDecoderObject *self, void *closure)
 static int
 _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_ssize_t read_size)
 {
+    PyObject *tmp, *read;
+    char *new_buffer = NULL;
+
     if (!value) {
         PyErr_SetString(PyExc_AttributeError, "cannot delete fp attribute");
         return -1;
     }
-
-    PyObject *read = PyObject_GetAttr(value, _CBOR2_str_read);
+    read = PyObject_GetAttr(value, _CBOR2_str_read);
     if (!(read && PyCallable_Check(read))) {
         PyErr_SetString(PyExc_ValueError,
                         "fp object must have a callable read method");
         return -1;
     }
 
-    char *new_buffer = NULL;
     if (self->readahead == NULL || self->readahead_size != read_size) {
         new_buffer = (char *)PyMem_Malloc(read_size);
         if (!new_buffer) {
@@ -245,13 +244,14 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
     }
 
     // See notes in encoder.c / _CBOREncoder_set_fp
-    PyObject *tmp = self->read;
+    tmp = self->read;
     self->read = read;
     Py_DECREF(tmp);
 
     self->read_pos = 0;
     self->read_len = 0;
 
+    // Replace buffer (size changed or was NULL)
     if (new_buffer) {
         PyMem_Free(self->readahead);
         self->readahead = new_buffer;
@@ -2248,10 +2248,8 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
         return NULL;
     }
 
-    // Decode
     ret = decode(self, DECODE_NORMAL);
 
-    // Cleanup and restore
     Py_XDECREF(self->read);  // Decrement BytesIO read method
     self->read = save_read;   // Restore saved read (already has correct refcount)
     Py_DECREF(buf);
@@ -2268,7 +2266,6 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     if (self->decode_depth == 0) {
         clear_shareable_state(self);
     }
-
     return ret;
 }
 
