@@ -2251,7 +2251,7 @@ CBORDecoder_decode_from_bytes(CBORDecoderObject *self, PyObject *data)
     ret = decode(self, DECODE_NORMAL);
 
     Py_XDECREF(self->read);  // Decrement BytesIO read method
-    self->read = save_read;   // Restore saved read (already has correct refcount)
+    self->read = save_read;  // Restore saved read (already has correct refcount)
     Py_DECREF(buf);
     self->decode_depth--;
 
@@ -2416,10 +2416,11 @@ PyDoc_STRVAR(CBORDecoder__doc__,
 ":param read_size:\n"
 "    the size of the read buffer (default 4096). The decoder reads from\n"
 "    the stream in chunks of this size for performance. This means the\n"
-"    stream position may advance beyond the bytes actually decoded.\n"
-"    Code that needs to read from the stream after decoding should use\n"
-"    :meth:`decode_from_bytes` instead, or set ``read_size=1`` to disable\n"
-"    buffering (at a performance cost).\n"
+"    stream position may advance beyond the bytes actually decoded. For\n"
+"    large values (bytestrings, text strings), reads may be larger than\n"
+"    ``read_size``. Code that needs to read from the stream after\n"
+"    decoding should use :meth:`decode_from_bytes` instead, or set\n"
+"    ``read_size=1`` to disable buffering (at a performance cost).\n"
 "\n"
 ".. _CBOR: https://cbor.io/\n"
 );
