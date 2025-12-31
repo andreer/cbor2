@@ -71,7 +71,7 @@ class CBORDecoder:
         fp: IO[bytes],
         tag_hook: Callable[[CBORDecoder, CBORTag], Any] | None = None,
         object_hook: Callable[[CBORDecoder, dict[Any, Any]], Any] | None = None,
-        str_errors: Literal["strict", "error", "replace"] = "strict",
+        str_errors: Literal["strict", "replace", "error"] = "strict",
     ):
         """
         :param fp:
@@ -151,17 +151,18 @@ class CBORDecoder:
             raise ValueError("object_hook must be None or a callable")
 
     @property
-    def str_errors(self) -> Literal["strict", "error", "replace"]:
+    def str_errors(self) -> Literal["strict", "replace"]:
         return self._str_errors
 
     @str_errors.setter
-    def str_errors(self, value: Literal["strict", "error", "replace"]) -> None:
-        if value in ("strict", "error", "replace"):
+    def str_errors(self, value: Literal["strict", "replace", "error"]) -> None:
+        if value == "error":
+            self._str_errors = "strict"
+        elif value in ("strict", "replace"):
             self._str_errors = value
         else:
             raise ValueError(
-                f"invalid str_errors value {value!r} (must be one of 'strict', "
-                "'error', or 'replace')"
+                f"invalid str_errors value {value!r} (must be 'strict' or 'replace')"
             )
 
     def set_shareable(self, value: T) -> T:
@@ -828,7 +829,7 @@ def loads(
     s: bytes | bytearray | memoryview,
     tag_hook: Callable[[CBORDecoder, CBORTag], Any] | None = None,
     object_hook: Callable[[CBORDecoder, dict[Any, Any]], Any] | None = None,
-    str_errors: Literal["strict", "error", "replace"] = "strict",
+    str_errors: Literal["strict", "replace"] = "strict",
 ) -> Any:
     """
     Deserialize an object from a bytestring.
@@ -863,7 +864,7 @@ def load(
     fp: IO[bytes],
     tag_hook: Callable[[CBORDecoder, CBORTag], Any] | None = None,
     object_hook: Callable[[CBORDecoder, dict[Any, Any]], Any] | None = None,
-    str_errors: Literal["strict", "error", "replace"] = "strict",
+    str_errors: Literal["strict", "replace"] = "strict",
 ) -> Any:
     """
     Deserialize an object from an open file.

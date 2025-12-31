@@ -34,6 +34,9 @@
 // copied from cpython/Objects/bytesobject.c for bounds checks
 #define PyBytesObject_SIZE (offsetof(PyBytesObject, ob_sval) + 1)
 
+// Threshold for using stack allocation vs heap allocation for short strings
+#define SMALL_STRING_STACK_THRESHOLD 256
+
 enum DecodeOption {
     DECODE_NORMAL = 0,
     DECODE_IMMUTABLE = 1,
@@ -149,6 +152,7 @@ CBORDecoder_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         Py_INCREF(Py_None);
         self->object_hook = Py_None;
         self->str_errors = PyBytes_FromString("strict");
+        self->str_errors_strict = true;
         self->immutable = false;
         self->shared_index = -1;
         self->decode_depth = 0;
@@ -369,11 +373,16 @@ _CBORDecoder_set_str_errors(CBORDecoderObject *self, PyObject *value,
     if (PyUnicode_Check(value)) {
         bytes = PyUnicode_AsASCIIString(value);
         if (bytes) {
-            if (!strcmp(PyBytes_AS_STRING(bytes), "strict") ||
-                    !strcmp(PyBytes_AS_STRING(bytes), "error") ||
-                    !strcmp(PyBytes_AS_STRING(bytes), "replace")) {
+            const char *mode = PyBytes_AS_STRING(bytes);
+            if (!strcmp(mode, "strict") || !strcmp(mode, "replace") || !strcmp(mode, "error")) {
                 tmp = self->str_errors;
+                if (!strcmp(mode, "error")) {
+                    Py_DECREF(bytes);
+                    bytes = PyBytes_FromString("strict");
+                    mode = "strict";
+                }
                 self->str_errors = bytes;
+                self->str_errors_strict = !strcmp(mode, "strict");
                 Py_DECREF(tmp);
                 return 0;
             }
@@ -381,8 +390,7 @@ _CBORDecoder_set_str_errors(CBORDecoderObject *self, PyObject *value,
         }
     }
     PyErr_Format(PyExc_ValueError,
-            "invalid str_errors value %R (must be one of 'strict', "
-            "'error', or 'replace')", value);
+            "invalid str_errors value %R (must be 'strict' or 'replace')", value);
     return -1;
 }
 
@@ -831,13 +839,28 @@ decode_bytestring(CBORDecoderObject *self, uint8_t subtype)
 static PyObject *
 decode_definite_short_string(CBORDecoderObject *self, Py_ssize_t length)
 {
-    PyObject *bytes_obj = fp_read_object(self, length);
-    if (!bytes_obj)
-        return NULL;
+    // Use stack buffer for small strings, heap for large
+    char stack_buf[SMALL_STRING_STACK_THRESHOLD];
+    char *buf = (length <= SMALL_STRING_STACK_THRESHOLD) ? stack_buf : PyMem_Malloc(length);
+    if (!buf && length > SMALL_STRING_STACK_THRESHOLD)
+        return PyErr_NoMemory();
 
-    const char *bytes = PyBytes_AS_STRING(bytes_obj);
-    PyObject *ret = PyUnicode_FromStringAndSize(bytes, length);
-    Py_DECREF(bytes_obj);
+    if (fp_read(self, buf, length) == -1) {
+        if (buf != stack_buf)
+            PyMem_Free(buf);
+        return NULL;
+    }
+
+    PyObject *ret;
+    if (self->str_errors_strict) {
+        ret = PyUnicode_FromStringAndSize(buf, length);
+    } else {
+        ret = PyUnicode_DecodeUTF8(buf, length, PyBytes_AS_STRING(self->str_errors));
+    }
+
+    if (buf != stack_buf)
+        PyMem_Free(buf);
+
     if (ret && string_namespace_add(self, ret, length) == -1) {
         Py_DECREF(ret);
         return NULL;
