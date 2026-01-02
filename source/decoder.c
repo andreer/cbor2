@@ -850,12 +850,8 @@ decode_definite_short_string(CBORDecoderObject *self, Py_ssize_t length)
         return NULL;
     }
 
-    PyObject *ret;
-    if (self->str_errors_strict) {
-        ret = PyUnicode_FromStringAndSize(buf, length);
-    } else {
-        ret = PyUnicode_DecodeUTF8(buf, length, PyBytes_AS_STRING(self->str_errors));
-    }
+    PyObject *ret = PyUnicode_DecodeUTF8(buf, length,
+        self->str_errors_strict ? NULL : PyBytes_AS_STRING(self->str_errors));
 
     if (buf != stack_buf)
         PyMem_Free(buf);
