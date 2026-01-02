@@ -152,7 +152,6 @@ CBORDecoder_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         Py_INCREF(Py_None);
         self->object_hook = Py_None;
         self->str_errors = PyBytes_FromString("strict");
-        self->str_errors_strict = true;
         self->immutable = false;
         self->shared_index = -1;
         self->decode_depth = 0;
@@ -376,7 +375,6 @@ _CBORDecoder_set_str_errors(CBORDecoderObject *self, PyObject *value,
             const char *mode = PyBytes_AS_STRING(bytes);
             if (!strcmp(mode, "strict") || !strcmp(mode, "error") || !strcmp(mode, "replace")) {
                 tmp = self->str_errors;
-                self->str_errors_strict = strcmp(mode, "replace") != 0;
                 if (!strcmp(mode, "error")) {
                     Py_DECREF(bytes);
                     bytes = PyBytes_FromString("strict");
@@ -850,12 +848,7 @@ decode_definite_short_string(CBORDecoderObject *self, Py_ssize_t length)
         return NULL;
     }
 
-    PyObject *ret;
-    if (self->str_errors_strict) {
-        ret = PyUnicode_FromStringAndSize(buf, length);
-    } else {
-        ret = PyUnicode_DecodeUTF8(buf, length, PyBytes_AS_STRING(self->str_errors));
-    }
+    PyObject *ret = PyUnicode_DecodeUTF8(buf, length, PyBytes_AS_STRING(self->str_errors));
 
     if (buf != stack_buf)
         PyMem_Free(buf);

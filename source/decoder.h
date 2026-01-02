@@ -14,7 +14,6 @@ typedef struct {
     PyObject *shareables;
     PyObject *stringref_namespace;
     PyObject *str_errors;
-    bool str_errors_strict;
     bool immutable;
     Py_ssize_t shared_index;
     Py_ssize_t decode_depth;
