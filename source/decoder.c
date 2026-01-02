@@ -34,6 +34,9 @@
 // copied from cpython/Objects/bytesobject.c for bounds checks
 #define PyBytesObject_SIZE (offsetof(PyBytesObject, ob_sval) + 1)
 
+// Threshold for using stack allocation vs heap allocation for short strings
+#define SMALL_STRING_STACK_THRESHOLD 256
+
 enum DecodeOption {
     DECODE_NORMAL = 0,
     DECODE_IMMUTABLE = 1,
@@ -835,18 +838,28 @@ decode_bytestring(CBORDecoderObject *self, uint8_t subtype)
 static PyObject *
 decode_definite_short_string(CBORDecoderObject *self, Py_ssize_t length)
 {
-    PyObject *bytes_obj = fp_read_object(self, length);
-    if (!bytes_obj)
-        return NULL;
+    // Use stack buffer for small strings, heap for large
+    char stack_buf[SMALL_STRING_STACK_THRESHOLD];
+    char *buf = (length <= SMALL_STRING_STACK_THRESHOLD) ? stack_buf : PyMem_Malloc(length);
+    if (!buf && length > SMALL_STRING_STACK_THRESHOLD)
+        return PyErr_NoMemory();
 
-    const char *bytes = PyBytes_AS_STRING(bytes_obj);
+    if (fp_read(self, buf, length) == -1) {
+        if (buf != stack_buf)
+            PyMem_Free(buf);
+        return NULL;
+    }
+
     PyObject *ret;
     if (self->str_errors_strict) {
-        ret = PyUnicode_FromStringAndSize(bytes, length);
+        ret = PyUnicode_FromStringAndSize(buf, length);
     } else {
-        ret = PyUnicode_DecodeUTF8(bytes, length, PyBytes_AS_STRING(self->str_errors));
+        ret = PyUnicode_DecodeUTF8(buf, length, PyBytes_AS_STRING(self->str_errors));
     }
-    Py_DECREF(bytes_obj);
+
+    if (buf != stack_buf)
+        PyMem_Free(buf);
+
     if (ret && string_namespace_add(self, ret, length) == -1) {
         Py_DECREF(ret);
         return NULL;
