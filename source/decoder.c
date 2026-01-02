@@ -840,7 +840,7 @@ decode_definite_short_string(CBORDecoderObject *self, Py_ssize_t length)
         return NULL;
 
     const char *bytes = PyBytes_AS_STRING(bytes_obj);
-    PyObject *ret = PyUnicode_FromStringAndSize(bytes, length);
+    PyObject *ret = PyUnicode_DecodeUTF8(bytes, length, PyBytes_AS_STRING(self->str_errors));
     Py_DECREF(bytes_obj);
     if (ret && string_namespace_add(self, ret, length) == -1) {
         Py_DECREF(ret);
