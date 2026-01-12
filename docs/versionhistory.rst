@@ -7,9 +7,16 @@ This library adheres to `Semantic Versioning 2.0 <http://semver.org/>`_.
 
 **UNRELEASED**
 
+- Changed the default ``read_size`` from 4096 to 1 for backwards compatibility.
+  The buffered reads introduced in 5.8.0 could cause issues when code needs to
+  access the stream position after decoding. Users can opt-in to faster decoding
+  by passing ``read_size=4096`` when they don't need to access the stream directly
+  after decoding. Added a fast path for ``read_size=1`` to avoid buffer management
+  overhead.
+  (PR by @andreer)
 - Fixed C decoder ignoring the ``str_errors`` setting when decoding strings, and improved
   string decoding performance by using stack allocation for small strings and eliminating
-  unnecessary conditionals. Benchmarks show 9-17% faster deserialization.
+  unnecessary conditionals.
   (`#255 <https://github.com/agronholm/cbor2/issues/255>`_,
   `#270 <https://github.com/agronholm/cbor2/pull/170>`_; PR by @andreer)
 

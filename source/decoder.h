@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Default readahead buffer size for streaming reads
-#define CBOR2_DEFAULT_READ_SIZE 4096
+// Default readahead buffer size for streaming reads.
+// Set to 1 for backwards compatibility (no buffering).
+#define CBOR2_DEFAULT_READ_SIZE 1
 
 typedef struct {
     PyObject_HEAD
