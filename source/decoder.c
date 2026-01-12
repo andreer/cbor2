@@ -236,7 +236,8 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
         return -1;
     }
 
-    if (self->readahead == NULL || self->readahead_size != read_size) {
+    // Skip buffer allocation for read_size=1 (fast path doesn't use buffer)
+    if (read_size > 1 && (self->readahead == NULL || self->readahead_size != read_size)) {
         new_buffer = (char *)PyMem_Malloc(read_size);
         if (!new_buffer) {
             Py_DECREF(read);
@@ -257,8 +258,12 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
     if (new_buffer) {
         PyMem_Free(self->readahead);
         self->readahead = new_buffer;
-        self->readahead_size = read_size;
+    } else if (read_size == 1 && self->readahead != NULL) {
+        // Free existing buffer when switching to fast path (read_size=1)
+        PyMem_Free(self->readahead);
+        self->readahead = NULL;
     }
+    self->readahead_size = read_size;
 
     return 0;
 }
@@ -454,6 +459,19 @@ static int
 fp_read(CBORDecoderObject *self, char *buf, const Py_ssize_t size)
 {
     Py_ssize_t available, to_copy, remaining, total_copied;
+
+    // Fast path: no buffering when read_size=1
+    if (self->readahead_size == 1) {
+        Py_ssize_t bytes_read = fp_read_bytes(self, buf, size);
+        if (bytes_read == size)
+            return 0;
+        if (bytes_read >= 0)
+            PyErr_Format(
+                _CBOR2_CBORDecodeEOF,
+                "premature end of stream (expected to read %zd bytes, "
+                "got %zd instead)", size, bytes_read);
+        return -1;
+    }
 
     remaining = size;
     total_copied = 0;

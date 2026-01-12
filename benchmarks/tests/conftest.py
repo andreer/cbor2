@@ -29,9 +29,10 @@ else:
 # See https://github.com/pytest-dev/pytest-cov/issues/418
 def pytest_configure(config):
     cov = config.pluginmanager.get_plugin("_cov")
-    cov.options.no_cov = True
-    if cov.cov_controller:
-        cov.cov_controller.pause()
+    if cov is not None:
+        cov.options.no_cov = True
+        if cov.cov_controller:
+            cov.cov_controller.pause()
 
 
 # See https://github.com/ionelmc/pytest-benchmark/issues/48
