@@ -835,7 +835,7 @@ def loads(
     tag_hook: Callable[[CBORDecoder, CBORTag], Any] | None = None,
     object_hook: Callable[[CBORDecoder, dict[Any, Any]], Any] | None = None,
     str_errors: Literal["strict", "error", "replace"] = "strict",
-    read_size: int = 1,
+    read_size: int = 4096,
 ) -> Any:
     """
     Deserialize an object from a bytestring.
@@ -856,9 +856,8 @@ def loads(
         section in the standard library documentation for details)
     :param read_size:
         the minimum number of bytes to request from the stream at a time.
-        Setting this to a higher value like 4096 improves performance,
-        but may read past the end of the CBOR value, making the stream
-        position unreliable if you need to access the stream directly after decoding.
+        Since loads() creates its own internal BytesIO, buffered reads are always
+        safe and the default is 4096 for better performance in the C extension.
         Ignored in the pure Python implementation, but included for API compatibility.
     :return:
         the deserialized object

@@ -70,6 +70,7 @@ extern PyObject *_CBOR2_str_parsestr;
 extern PyObject *_CBOR2_str_pattern;
 extern PyObject *_CBOR2_str_prefixlen;
 extern PyObject *_CBOR2_str_read;
+extern PyObject *_CBOR2_str_read_size;
 extern PyObject *_CBOR2_str_real;
 extern PyObject *_CBOR2_str_s;
 extern PyObject *_CBOR2_str_timestamp;

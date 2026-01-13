@@ -327,25 +327,59 @@ static PyObject *
 CBOR2_loads(PyObject *module, PyObject *args, PyObject *kwargs)
 {
     PyObject *fp, *new_args = NULL, *s = NULL, *ret = NULL;
+    PyObject *new_kwargs = NULL;
     Py_ssize_t i;
+    int owns_kwargs = 0;
 
     if (!_CBOR2_BytesIO && _CBOR2_init_BytesIO() == -1)
         return NULL;
+
+    // For loads(), we can safely use buffered reads since we control the BytesIO.
+    // Set read_size=4096 by default if not explicitly provided.
+    if (kwargs == NULL || !PyDict_Contains(kwargs, _CBOR2_str_read_size)) {
+        PyObject *read_size_val = PyLong_FromLong(4096);
+        if (!read_size_val)
+            return NULL;
+
+        if (kwargs == NULL) {
+            new_kwargs = PyDict_New();
+        } else {
+            new_kwargs = PyDict_Copy(kwargs);
+        }
+        if (!new_kwargs) {
+            Py_DECREF(read_size_val);
+            return NULL;
+        }
+        if (PyDict_SetItem(new_kwargs, _CBOR2_str_read_size, read_size_val) == -1) {
+            Py_DECREF(read_size_val);
+            Py_DECREF(new_kwargs);
+            return NULL;
+        }
+        Py_DECREF(read_size_val);
+        kwargs = new_kwargs;
+        owns_kwargs = 1;
+    }
 
     if (PyTuple_GET_SIZE(args) == 0) {
         if (kwargs) {
             new_args = PyTuple_New(1);
             if (new_args) {
                 s = PyDict_GetItem(kwargs, _CBOR2_str_s);
-                Py_INCREF(s);
-                if (PyDict_DelItem(kwargs, _CBOR2_str_s) == -1) {
-                    Py_DECREF(s);
+                if (s) {
+                    Py_INCREF(s);
+                    if (PyDict_DelItem(kwargs, _CBOR2_str_s) == -1) {
+                        Py_DECREF(s);
+                        Py_CLEAR(new_args);
+                    }
+                } else {
+                    PyErr_SetString(PyExc_TypeError,
+                            "loads missing 1 required argument: 's'");
                     Py_CLEAR(new_args);
                 }
             }
         } else {
             PyErr_SetString(PyExc_TypeError,
-                    "dump missing 1 required argument: 's'");
+                    "loads missing 1 required argument: 's'");
         }
     } else {
         new_args = PyTuple_New(PyTuple_GET_SIZE(args));
@@ -370,6 +404,10 @@ CBOR2_loads(PyObject *module, PyObject *args, PyObject *kwargs)
         Py_DECREF(s);
         Py_DECREF(new_args);
     }
+
+    if (owns_kwargs)
+        Py_DECREF(new_kwargs);
+
     return ret;
 }
 
@@ -638,6 +676,7 @@ PyObject *_CBOR2_str_parsestr = NULL;
 PyObject *_CBOR2_str_pattern = NULL;
 PyObject *_CBOR2_str_prefixlen = NULL;
 PyObject *_CBOR2_str_read = NULL;
+PyObject *_CBOR2_str_read_size = NULL;
 PyObject *_CBOR2_str_real = NULL;
 PyObject *_CBOR2_str_s = NULL;
 PyObject *_CBOR2_str_timestamp = NULL;
@@ -974,6 +1013,7 @@ PyInit__cbor2(void)
     INTERN_STRING(pattern);
     INTERN_STRING(prefixlen);
     INTERN_STRING(read);
+    INTERN_STRING(read_size);
     INTERN_STRING(real);
     INTERN_STRING(s);
     INTERN_STRING(timestamp);
