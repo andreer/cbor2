@@ -91,10 +91,11 @@ class CBORDecoder:
             determines how to handle unicode decoding errors (see the `Error Handlers`_
             section in the standard library documentation for details)
         :param read_size:
-            the minimum number of bytes to request from the stream at a time.
+            the minimum number of bytes to read at a time.
             Setting this to a higher value like 4096 improves performance,
-            but may read past the end of the CBOR value, making the stream
-            position unreliable if you need to access the stream directly after decoding.
+            but is likely to read past the end of the CBOR value, advancing the stream
+            position beyond the decoded data. This only matters if you need to reuse the
+            stream after decoding.
             Ignored in the pure Python implementation, but included for API compatibility.
 
         .. _Error Handlers: https://docs.python.org/3/library/codecs.html#error-handlers
@@ -855,10 +856,8 @@ def loads(
         determines how to handle unicode decoding errors (see the `Error Handlers`_
         section in the standard library documentation for details)
     :param read_size:
-        the minimum number of bytes to request from the stream at a time.
-        Setting this to a higher value like 4096 improves performance,
-        but may read past the end of the CBOR value, making the stream
-        position unreliable if you need to access the stream directly after decoding.
+        the minimum number of bytes to read at a time.
+        Setting this to a higher value like 4096 improves performance.
         Ignored in the pure Python implementation, but included for API compatibility.
     :return:
         the deserialized object
@@ -901,10 +900,11 @@ def load(
         determines how to handle unicode decoding errors (see the `Error Handlers`_
         section in the standard library documentation for details)
     :param read_size:
-        the minimum number of bytes to request from the stream at a time.
+        the minimum number of bytes to read at a time.
         Setting this to a higher value like 4096 improves performance,
-        but may read past the end of the CBOR value, making the stream
-        position unreliable if you need to access the stream directly after decoding.
+        but is likely to read past the end of the CBOR value, advancing the stream
+        position beyond the decoded data. This only matters if you need to reuse the
+        stream after decoding.
         Ignored in the pure Python implementation, but included for API compatibility.
     :return:
         the deserialized object
