@@ -170,7 +170,7 @@ error:
 
 
 // CBORDecoder.__init__(self, fp=None, tag_hook=None, object_hook=None,
-//                      str_errors='strict', read_size=4096)
+//                      str_errors='strict', read_size=1)
 int
 CBORDecoder_init(CBORDecoderObject *self, PyObject *args, PyObject *kwargs)
 {
@@ -239,7 +239,7 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
         return -1;
     }
 
-    // Skip buffer allocation for read_size=1 (fast path doesn't use buffer)
+    // Skip buffer allocation for read_size=1 (direct read path doesn't use buffer)
     if (read_size > 1 && (self->readahead == NULL || self->readahead_size != read_size)) {
         new_buffer = (char *)PyMem_Malloc(read_size);
         if (!new_buffer) {
@@ -262,7 +262,7 @@ _CBORDecoder_set_fp_with_read_size(CBORDecoderObject *self, PyObject *value, Py_
         PyMem_Free(self->readahead);
         self->readahead = new_buffer;
     } else if (read_size == 1 && self->readahead != NULL) {
-        // Free existing buffer when switching to fast path (read_size=1)
+        // Free existing buffer when switching to direct read path (read_size=1)
         PyMem_Free(self->readahead);
         self->readahead = NULL;
     }
@@ -2443,13 +2443,11 @@ PyDoc_STRVAR(CBORDecoder__doc__,
 "    :class:`dict` object. The return value is substituted for the dict\n"
 "    in the deserialized output.\n"
 ":param read_size:\n"
-"    the size of the read buffer (default 4096). The decoder reads from\n"
-"    the stream in chunks of this size for performance. This means the\n"
-"    stream position may advance beyond the bytes actually decoded. For\n"
-"    large values (bytestrings, text strings), reads may be larger than\n"
-"    ``read_size``. Code that needs to read from the stream after\n"
-"    decoding should use :meth:`decode_from_bytes` instead, or set\n"
-"    ``read_size=1`` to disable buffering (at a performance cost).\n"
+"    the minimum number of bytes to request from the stream at a time.\n"
+"    Setting this to a higher value like 4096 improves performance,\n"
+"    but may read past the end of the CBOR value, making the stream\n"
+"    position unreliable if you need to access the stream directly after decoding.\n"
+"    Ignored in the pure Python implementation, but included for API compatibility.\n"
 "\n"
 ".. _CBOR: https://cbor.io/\n"
 );

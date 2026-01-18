@@ -11,8 +11,8 @@ This library adheres to `Semantic Versioning 2.0 <http://semver.org/>`_.
   The buffered reads introduced in 5.8.0 could cause issues when code needs to
   access the stream position after decoding. Users can opt-in to faster decoding
   by passing ``read_size=4096`` when they don't need to access the stream directly
-  after decoding. Added a fast path for ``read_size=1`` to avoid buffer management
-  overhead.
+  after decoding. Added a direct read path for ``read_size=1`` to avoid buffer
+  management overhead.
   (PR by @andreer)
 
 **5.8.0** (2025-12-30)
